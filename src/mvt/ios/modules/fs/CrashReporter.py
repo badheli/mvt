@@ -15,12 +15,10 @@ from mvt.common.utils import convert_datetime_to_iso
 
 CRASH_REPORTER_LOG_PATHS = [
     "private/var/mobile/Library/Logs/CrashReporter/*.ips",
-    # "private/var/mobile/Library/Logs/Logs/CrashReporter/*.ips.ca",
-    # "private/var/mobile/Library/Logs/Logs/CrashReporter/*.ips.ca.synced",
-    # "DiagnosticLogs/sysdiagnose/*/*.ips",
-    # "DiagnosticLogs/sysdiagnose/*/*.ips.ca",
-    # "*.ips.ca",
-    # "*.ips"
+    "private/var/mobile/Library/Logs/CrashReporter/*.ips.ca",
+    "private/var/mobile/Library/Logs/CrashReporter/*.ips.ca.synced",
+    "DiagnosticLogs/sysdiagnose/*/*.ips",
+    "DiagnosticLogs/sysdiagnose/*/*.ips.ca",
 ]
 
 
@@ -54,7 +52,7 @@ class CrashReporterLog(IOSExtraction):
             "module": self.__class__.__name__,
             "event": "crashreporter_activity",
             "data": (
-                f"Application '{record['name']}' crashed (Bug Type: {record['bug_type']}) "
+                f"Process '{record['name']}' crashed (Bug Type: {record['bug_type']}) "
                 f"on {record['os_version']} - Incident ID: {record['incident_id']}"
             ),
         }
@@ -75,7 +73,7 @@ class CrashReporterLog(IOSExtraction):
                     {
                         "isodate": convert_datetime_to_iso(timestamp_utc),
                         "os_version": log_line["os_version"],
-                        "name": log_line.get("name", "unknown"),
+                        "name": log_line.get("name", os.path.basename(found_path)),
                         "bug_type": log_line.get("bug_type", "unknown"),
                         "incident_id": log_line.get("incident_id", "unknown"),
                         "path": os.path.basename(found_path)
