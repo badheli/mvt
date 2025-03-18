@@ -60,6 +60,7 @@ class CrashReporterLog(IOSExtraction):
 
     def run(self) -> None:
         for found_path in self._get_fs_files_from_patterns(CRASH_REPORTER_LOG_PATHS):
+            self.log.info("Found CrashReporter log at path: %s", found_path)
             with open(found_path, "rb") as crash_report_log:
                 content = crash_report_log.read().decode('utf-8', errors='ignore')
                 lines = content.split("\n")
