@@ -14,6 +14,8 @@ from .version_history import IOSVersionHistory
 from .webkit_indexeddb import WebkitIndexedDB
 from .webkit_localstorage import WebkitLocalStorage
 from .webkit_safariviewservice import WebkitSafariViewService
+from .SMSMigratorlog import SMSMigratorLog
+from .CrashReporter import CrashReporterLog
 
 FS_MODULES = [
     CacheFiles,
@@ -27,4 +29,6 @@ FS_MODULES = [
     WebkitIndexedDB,
     WebkitLocalStorage,
     WebkitSafariViewService,
+    SMSMigratorLog,
+    CrashReporterLog,
 ]
