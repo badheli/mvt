@@ -4,8 +4,9 @@
 #   https://license.mvt.re/1.1/
 
 import logging
+import datetime
 from typing import Optional, Union
-
+from mvt.common.utils import convert_datetime_to_iso
 from ..base import IOSExtraction
 
 SMS_MIGRATOR_LOG_PATH = [
@@ -42,6 +43,7 @@ class SMSMigratorLog(IOSExtraction):
             "data": f"Process {record['process']} with PID {record['pid']} "
                     f"performed action: {record['action']}",
         }
+
     def process_smsmigrator_log(self, content):
         for line in content.split("\n"):
             line = line.strip()
@@ -50,22 +52,28 @@ class SMSMigratorLog(IOSExtraction):
 
             try:
                 # Parse the log line
-                # Example: "2021-09-21 20:25:54 -0700 IMDPersistenceAgent[187]: Created table (if needed) ok: deleted_messages"
-                timestamp = line[0:19] + " " + line[20:25]  # e.g., "2021-09-21 20:25:54 -0700"
-                process_start = len(timestamp) + 1
+                # Example: "2025-03-05 03:04:32 +0800 IMDPersistenceAgent[187]: Created table (if needed) ok: deleted_messages"
+                timestamp_str = line[0:19] + " " + line[20:25]  # e.g., "2025-03-05 03:04:32 +0800"
+                process_start = len(timestamp_str) + 1
                 process_end = line.find("[")
                 process = line[process_start:process_end]
                 pid = line[process_end + 1:line.find("]")]
                 action = line[line.find(":") + 2:].strip()
+                
+                # Parse timestamp without microseconds
+                timestamp = datetime.datetime.strptime(
+                    timestamp_str, "%Y-%m-%d %H:%M:%S %z"
+                )
+                timestamp_utc = timestamp.astimezone(datetime.timezone.utc)
 
                 self.results.append({
-                    "timestamp": timestamp,
+                    "timestamp": convert_datetime_to_iso(timestamp_utc),
                     "process": process,
                     "pid": pid,
                     "action": action,
                 })
             except Exception as e:
-                self.log.error("Failed to parse SMSMigrator log line: %s (%s)", line, str(e))
+                self.log.error("Failed to parse SMSMigrator log (%s)", str(e))
 
         # Sort results by timestamp
         self.results = sorted(self.results, key=lambda entry: entry["timestamp"])
