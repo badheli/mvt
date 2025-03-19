@@ -17,8 +17,9 @@ CRASH_REPORTER_LOG_PATHS = [
     "private/var/mobile/Library/Logs/CrashReporter/*.ips",
     "private/var/mobile/Library/Logs/CrashReporter/*.ips.ca",
     "private/var/mobile/Library/Logs/CrashReporter/*.ips.ca.synced",
-    "DiagnosticLogs/sysdiagnose/*/*.ips",
-    "DiagnosticLogs/sysdiagnose/*/*.ips.ca",
+    "**/DiagnosticLogs/sysdiagnose/*/crashes_and_spins/*.ips",
+    "**/DiagnosticLogs/sysdiagnose/*/crashes_and_spins/*.ips",
+    "*.ips",
 ]
 
 
@@ -64,8 +65,10 @@ class CrashReporterLog(IOSExtraction):
             with open(found_path, "rb") as crash_report_log:
                 content = crash_report_log.read().decode('utf-8', errors='ignore')
                 lines = content.split("\n")
-                log_line = loads(lines[0])
-
+                try:
+                    log_line = loads(lines[0])
+                except Exception as e:
+                    self.log.error("Failed to parse CrashReporter log (%s) path: (%s)", str(e),found_path)
                 timestamp = datetime.datetime.strptime(
                     log_line["timestamp"], "%Y-%m-%d %H:%M:%S.%f %z"
                 )
