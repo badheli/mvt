@@ -153,7 +153,7 @@ class IOSExtraction(MVTModule):
 
     def _get_fs_files_from_patterns(self, root_paths: list) -> Iterator[str]:
         for root_path in root_paths:
-            for found_path in glob.glob(os.path.join(self.target_path, root_path)):
+            for found_path in glob.glob(os.path.join(self.target_path, root_path), recursive=True):
                 if not os.path.exists(found_path):
                     continue
 
