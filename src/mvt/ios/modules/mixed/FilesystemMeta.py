@@ -10,7 +10,7 @@ from mvt.common.utils import convert_mactime_to_iso
 from ..base import IOSExtraction
 
 FILE_SYSTEM_MATE_LOG_PATHS = [
-    "*.fslisting",
+    "**/*.fslisting",
 ]
 
 

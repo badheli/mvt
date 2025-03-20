@@ -139,3 +139,5 @@ dmypy.json
 
 # Sublime Text project files
 *.sublime*
+/mvt_check_fs_output
+/mvt_check_backup_myself

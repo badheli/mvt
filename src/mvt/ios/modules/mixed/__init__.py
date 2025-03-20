@@ -26,6 +26,8 @@ from .tcc import TCC
 from .webkit_resource_load_statistics import WebkitResourceLoadStatistics
 from .webkit_session_resource_log import WebkitSessionResourceLog
 from .whatsapp import Whatsapp
+from .FilesystemMeta import FilesystemMetaLog
+from .CrashReporter import CrashReporterLog
 
 MIXED_MODULES = [
     Calls,
@@ -51,4 +53,6 @@ MIXED_MODULES = [
     Applications,
     Calendar,
     GlobalPreferences,
+    FilesystemMetaLog,
+    CrashReporterLog,
 ]
