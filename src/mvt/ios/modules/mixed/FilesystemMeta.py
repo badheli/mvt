@@ -14,7 +14,7 @@ from ..base import IOSExtraction
 
 FILE_SYSTEM_MATE_LOG_PATHS = [
     # "**/*.fslisting",
-    "*.fsmeta.tgz",
+    "FilesystemMeta-*.fsmeta.tgz",
 ]
 
 

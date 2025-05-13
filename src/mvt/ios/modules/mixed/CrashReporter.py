@@ -2,25 +2,33 @@
 # Copyright (c) 2021-2023 The MVT Authors.
 # Use of this software is governed by the MVT License 1.1 that can be found at
 #   https://license.mvt.re/1.1/
-
+import os
+import glob
+import re
+import tarfile
+import tempfile
 import logging
 from json import loads, JSONDecodeError
-from typing import Optional, Union, Dict, List
 from pathlib import Path
 import datetime
-import os 
 from ..base import IOSExtraction
 from mvt.common.utils import convert_datetime_to_iso
+from typing import Iterator, Optional, Union,Optional, Union, Dict, List
 
-
-CRASH_REPORTER_LOG_PATHS = [
+CRASH_REPORTER_LOG_FS_PATHS = [
+    # check fs 
     "private/var/mobile/Library/Logs/CrashReporter/*.ips",
     "private/var/mobile/Library/Logs/CrashReporter/*.ips.ca",
     "private/var/mobile/Library/Logs/CrashReporter/*.ips.ca.synced",
-    "**/DiagnosticLogs/sysdiagnose/*/crashes_and_spins/*.ips",
-    "**/DiagnosticLogs/sysdiagnose/*/crashes_and_spins/*.ips",
+]
+CRASH_REPORTER_LOG_PATHS = [
+    "**/*.ips",
     "*.ips",
 ]
+SYSDIAGNOSE_PATH = [
+    "DiagnosticLogs/sysdiagnose/sysdiagnose_*.tar.gz",
+]
+
 
 
 class CrashReporterLog(IOSExtraction):
@@ -45,43 +53,76 @@ class CrashReporterLog(IOSExtraction):
             results=results,
         )
 
+    def _get_files_from_patterns(self, target_path: str, root_paths: list) -> Iterator[str]:
+        for root_path in root_paths:
+            for found_path in glob.glob(os.path.join(target_path, root_path), recursive=True):
+                if not os.path.exists(found_path):
+                    continue
+
+                yield found_path
+
 
     def serialize(self, record: dict) -> Union[dict, list]:
         """Serializes crash report data into a standardized format."""
         return {
-            "timestamp": record["isodate"],
+            "timestamp": record["timestamp"],
             "module": self.__class__.__name__,
-            "event": "crashreporter_activity",
-            "data": (
-                f"Process '{record['name']}' crashed (Bug Type: {record['bug_type']}) "
-                f"on {record['os_version']} - Incident ID: {record['incident_id']}"
-            ),
+            "event": record['event'],
+            "data": record['data'],
         }
+    
+
+    def process_sysdiagnose_log(self, extracted_path: str , patterns: list) -> None:
+            # Process each .fslisting file
+            self.log.info("Processing sysdiagnose log at path: %s", extracted_path)
+            for ips_file in self._get_files_from_patterns(extracted_path,patterns):
+                ips_file_name = ips_file.split("/")[-1]
+                self.log.info("Found CrashReporter log at path: %s", ips_file_name)
+                with open(ips_file, "rb") as crash_report_log:
+                    content = crash_report_log.read().decode('utf-8', errors='ignore')
+                    lines = content.split("\n")
+                    try:
+                        log_line = loads(lines[0])
+                    except Exception as e:
+                        self.log.error("Failed to parse CrashReporter log (%s) path: (%s)", str(e),ips_file_name)
+                    
+                    try:
+                        timestamp = datetime.datetime.strptime(
+                            log_line["timestamp"], "%Y-%m-%d %H:%M:%S.%f %z"
+                        )
+                    except Exception as e:
+                        self.log.error("Failed to parse timestamp (%s) path: (%s)", str(e),ips_file_name)
+                        continue
+
+                    timestamp_utc = timestamp.astimezone(datetime.timezone.utc)
+                    self.results.append(
+                        {
+                            "timestamp": convert_datetime_to_iso(timestamp_utc),
+                            "event": "crashreporter_activity",
+                            "data": (
+                                f"Process '{log_line.get("name", ips_file_name)}' crashed (Bug Type: {log_line.get("bug_type", "unknown")}) "
+                                f"on {log_line["os_version"]} - Incident ID: {log_line.get("incident_id", "unknown")}"
+                            ),
+                        }
+                    )
 
 
     def run(self) -> None:
-        for found_path in self._get_fs_files_from_patterns(CRASH_REPORTER_LOG_PATHS):
-            self.log.info("Found CrashReporter log at path: %s", found_path)
-            with open(found_path, "rb") as crash_report_log:
-                content = crash_report_log.read().decode('utf-8', errors='ignore')
-                lines = content.split("\n")
-                try:
-                    log_line = loads(lines[0])
-                except Exception as e:
-                    self.log.error("Failed to parse CrashReporter log (%s) path: (%s)", str(e),found_path)
-                timestamp = datetime.datetime.strptime(
-                    log_line["timestamp"], "%Y-%m-%d %H:%M:%S.%f %z"
-                )
-                timestamp_utc = timestamp.astimezone(datetime.timezone.utc)
-                self.results.append(
-                    {
-                        "isodate": convert_datetime_to_iso(timestamp_utc),
-                        "os_version": log_line["os_version"],
-                        "name": log_line.get("name", os.path.basename(found_path)),
-                        "bug_type": log_line.get("bug_type", "unknown"),
-                        "incident_id": log_line.get("incident_id", "unknown"),
-                        "path": os.path.basename(found_path)
-                    }
-                )
+        for found_path in self._get_fs_files_from_patterns(SYSDIAGNOSE_PATH):
+            # DiagnosticLogs/sysdiagnose/sysdiagnose_2025.05.13_14-38-43+0800_iPhone-OS_iPhone_22E252.tar.gz
+            self.log.info("Found sysdiagnose log at path: %s", found_path)
+            # Extract the tar file to a temporary directory
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                self.log.info("Extracting sysdiagnose log to: %s", tmp_dir)
+                with tarfile.open(found_path, "r:gz") as tar:
+                    tar.extractall(path=tmp_dir)
+                # Find the extracted sysdiagnose files
+                extracted_path = os.path.join(tmp_dir, found_path.split("/")[-1].replace(".tar.gz", ""))
+                self.process_sysdiagnose_log(extracted_path, CRASH_REPORTER_LOG_PATHS)
+                
+        if self.is_backup:
+            self.process_sysdiagnose_log(self.target_path, CRASH_REPORTER_LOG_PATHS)
+        else:
+            self.process_sysdiagnose_log(self.target_path, CRASH_REPORTER_LOG_FS_PATHS)
 
-        self.results = sorted(self.results, key=lambda entry: entry["isodate"])
+        self.results = sorted(self.results, key=lambda entry: entry["timestamp"])
