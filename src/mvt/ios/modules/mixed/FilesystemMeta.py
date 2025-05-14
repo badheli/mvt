@@ -8,7 +8,7 @@ import tarfile
 import tempfile
 import logging
 import datetime
-from typing import Optional, Union
+from typing import Iterator, Optional, Union
 from mvt.common.utils import convert_mactime_to_iso
 from ..base import IOSExtraction
 
@@ -159,32 +159,34 @@ class FilesystemMetaLog(IOSExtraction):
     
     def run(self) -> None:
         # Check for diagnostic logs from config
-        if settings.DIAGNOSTIC_LOGS_PATHS:
-            for log_path in settings.DIAGNOSTIC_LOGS_PATHS:
-                # Add a print statement for testing
-                print(f"Additional diagnostic logs paths: {settings.DIAGNOSTIC_LOGS_PATHS}")
-                self.log.info("Processing diagnostic log file from config: %s", log_path)
-                # TODO: Add logic here to process the diagnostic log file
-                for found_path in self._get_files_from_patterns(log_path, FILE_SYSTEM_MATE_LOG_PATHS):
-                    # # FilesystemMeta-*.fsmeta.tgz
-                    self.log.info("Found FilesystemMeta log at path: %s", found_path)
-                    # Extract the tar file to a temporary directory
-                    with tempfile.TemporaryDirectory() as tmp_dir:
-                        self.log.info("Extracting FilesystemMeta log to: %s", tmp_dir)
-                        with tarfile.open(found_path, "r:gz") as tar:
-                            tar.extractall(path=tmp_dir)
-                            # list the contents of the extracted directory
-                            # self.log.info("Extracted files: %s",os.listdir(tmp_dir))
-                        # Find the extracted .fsmeta files
-                        fslisting_path = os.path.join(tmp_dir, found_path.split("/")[-1].replace(".tgz", ""))
-                        # self.log.info("Extracted fsmeta path: %s", fsmeta_path)
-                        fsmeta_files = glob.glob(os.path.join(fslisting_path, "*.fslisting"))
-                        if not fsmeta_files:
-                            self.log.warning("No .fslisting files found in the extracted directory.")
-                            continue
-                        # Process each .fslisting file
-                        for fsmeta_file in fsmeta_files:
-                            self.log.info("Processing .fslisting file: %s", fsmeta_file.split("/")[-1])
-                            with open(fsmeta_file, "r") as f:
-                                content = f.read()
-                                self.process_file_system_mate_log(content) 
+        if DIAGNOSTIC_LOGS_PATH in os.environ:
+            
+            if not os.path.exists(os.environ[DIAGNOSTIC_LOGS_PATH]):
+                self.log.warning("Diagnostic logs path does not exist: %s", os.environ[DIAGNOSTIC_LOGS_PATH])
+                return
+            # Add a print statement for testing
+            # print(f"Additional diagnostic logs paths: {os.environ[DIAGNOSTIC_LOGS_PATH]}")
+            self.log.info("Processing diagnostic log file from config: %s", os.environ[DIAGNOSTIC_LOGS_PATH])
+            for found_path in self._get_files_from_patterns(os.environ[DIAGNOSTIC_LOGS_PATH], FILE_SYSTEM_MATE_LOG_PATHS):
+                # # FilesystemMeta-*.fsmeta.tgz
+                self.log.info("Found FilesystemMeta log at path: %s", found_path)
+                # Extract the tar file to a temporary directory
+                with tempfile.TemporaryDirectory() as tmp_dir:
+                    self.log.info("Extracting FilesystemMeta log to: %s", tmp_dir)
+                    with tarfile.open(found_path, "r:gz") as tar:
+                        tar.extractall(path=tmp_dir)
+                        # list the contents of the extracted directory
+                        # self.log.info("Extracted files: %s",os.listdir(tmp_dir))
+                    # Find the extracted .fsmeta files
+                    fslisting_path = os.path.join(tmp_dir, found_path.split("/")[-1].replace(".tgz", ""))
+                    # self.log.info("Extracted fsmeta path: %s", fsmeta_path)
+                    fsmeta_files = glob.glob(os.path.join(fslisting_path, "*.fslisting"))
+                    if not fsmeta_files:
+                        self.log.warning("No .fslisting files found in the extracted directory.")
+                        continue
+                    # Process each .fslisting file
+                    for fsmeta_file in fsmeta_files:
+                        self.log.info("Processing .fslisting file: %s", fsmeta_file.split("/")[-1])
+                        with open(fsmeta_file, "r") as f:
+                            content = f.read()
+                            self.process_file_system_mate_log(content) 

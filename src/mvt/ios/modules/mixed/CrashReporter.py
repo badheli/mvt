@@ -116,14 +116,14 @@ class CrashReporterLog(IOSExtraction):
             self.process_sysdiagnose_log(self.target_path, CRASH_REPORTER_LOG_FS_PATHS)
         # Check for diagnostic logs from config
         if DIAGNOSTIC_LOGS_PATH in os.environ:
-            if not os.path.exists(DIAGNOSTIC_LOGS_PATH):
-                self.log.warning("Diagnostic logs path does not exist: %s", DIAGNOSTIC_LOGS_PATH)
+            if not os.path.exists(os.environ[DIAGNOSTIC_LOGS_PATH]):
+                self.log.warning("Diagnostic logs path does not exist: %s", os.environ[DIAGNOSTIC_LOGS_PATH])
                 return
             # Add a print statement for testing
-            print(f"Additional diagnostic logs paths: {DIAGNOSTIC_LOGS_PATH}")
-            self.log.info("Processing diagnostic log file from config: %s", DIAGNOSTIC_LOGS_PATH)
+            # print(f"Additional diagnostic logs paths: {os.environ[DIAGNOSTIC_LOGS_PATH]}")
+            self.log.info("Processing diagnostic log file from config: %s", os.environ[DIAGNOSTIC_LOGS_PATH])
 
-            for found_path in self._get_files_from_patterns(DIAGNOSTIC_LOGS_PATH, SYSDIAGNOSE_PATH):
+            for found_path in self._get_files_from_patterns(os.environ[DIAGNOSTIC_LOGS_PATH], SYSDIAGNOSE_PATH):
                 # DiagnosticLogs/sysdiagnose/sysdiagnose_2025.05.13_14-38-43+0800_iPhone-OS_iPhone_22E252.tar.gz
                 self.log.info("Found sysdiagnose log at path: %s", found_path)
                 # Extract the tar file to a temporary directory
