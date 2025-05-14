@@ -29,6 +29,7 @@ SYSDIAGNOSE_PATH = [
     "DiagnosticLogs/sysdiagnose/sysdiagnose_*.tar.gz",
 ]
 
+DIAGNOSTIC_LOGS_PATH = "DIAGNOSTIC_LOGS_PATH"
 
 
 class CrashReporterLog(IOSExtraction):
@@ -108,21 +109,30 @@ class CrashReporterLog(IOSExtraction):
 
 
     def run(self) -> None:
-        for found_path in self._get_fs_files_from_patterns(SYSDIAGNOSE_PATH):
-            # DiagnosticLogs/sysdiagnose/sysdiagnose_2025.05.13_14-38-43+0800_iPhone-OS_iPhone_22E252.tar.gz
-            self.log.info("Found sysdiagnose log at path: %s", found_path)
-            # Extract the tar file to a temporary directory
-            with tempfile.TemporaryDirectory() as tmp_dir:
-                self.log.info("Extracting sysdiagnose log to: %s", tmp_dir)
-                with tarfile.open(found_path, "r:gz") as tar:
-                    tar.extractall(path=tmp_dir)
-                # Find the extracted sysdiagnose files
-                extracted_path = os.path.join(tmp_dir, found_path.split("/")[-1].replace(".tar.gz", ""))
-                self.process_sysdiagnose_log(extracted_path, CRASH_REPORTER_LOG_PATHS)
                 
         if self.is_backup:
             self.process_sysdiagnose_log(self.target_path, CRASH_REPORTER_LOG_PATHS)
         else:
             self.process_sysdiagnose_log(self.target_path, CRASH_REPORTER_LOG_FS_PATHS)
+        # Check for diagnostic logs from config
+        if DIAGNOSTIC_LOGS_PATH in os.environ:
+            if not os.path.exists(DIAGNOSTIC_LOGS_PATH):
+                self.log.warning("Diagnostic logs path does not exist: %s", DIAGNOSTIC_LOGS_PATH)
+                return
+            # Add a print statement for testing
+            print(f"Additional diagnostic logs paths: {DIAGNOSTIC_LOGS_PATH}")
+            self.log.info("Processing diagnostic log file from config: %s", DIAGNOSTIC_LOGS_PATH)
+
+            for found_path in self._get_files_from_patterns(DIAGNOSTIC_LOGS_PATH, SYSDIAGNOSE_PATH):
+                # DiagnosticLogs/sysdiagnose/sysdiagnose_2025.05.13_14-38-43+0800_iPhone-OS_iPhone_22E252.tar.gz
+                self.log.info("Found sysdiagnose log at path: %s", found_path)
+                # Extract the tar file to a temporary directory
+                with tempfile.TemporaryDirectory() as tmp_dir:
+                    self.log.info("Extracting sysdiagnose log to: %s", tmp_dir)
+                    with tarfile.open(found_path, "r:gz") as tar:
+                        tar.extractall(path=tmp_dir)
+                    # Find the extracted sysdiagnose files
+                    extracted_path = os.path.join(tmp_dir, found_path.split("/")[-1].replace(".tar.gz", ""))
+                    self.process_sysdiagnose_log(extracted_path, CRASH_REPORTER_LOG_PATHS)
 
         self.results = sorted(self.results, key=lambda entry: entry["timestamp"])
