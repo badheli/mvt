@@ -95,14 +95,23 @@ class CrashReporterLog(IOSExtraction):
                         self.log.error("Failed to parse timestamp (%s) path: (%s)", str(e),ips_file_name)
                         continue
 
+                    try:
+                        isSystemProcess = True
+                        bundleID = log_line["bundleID"]
+                        if not bundleID.startswith("com.apple."):
+                            isSystemProcess = False
+                    except Exception as e:
+                        # self.log.error("Failed to parse bundleID (%s) path: (%s)", str(e),ips_file_name)
+                        continue                    
+
                     timestamp_utc = timestamp.astimezone(datetime.timezone.utc)
                     self.results.append(
                         {
                             "timestamp": convert_datetime_to_iso(timestamp_utc),
-                            "event": "crashreporter_activity",
+                            "event": "system_crashreporter_activity" if isSystemProcess else "crashreporter_activity",
                             "data": (
-                                f"Process '{log_line.get("name", ips_file_name)}' crashed (Bug Type: {log_line.get("bug_type", "unknown")}) "
-                                f"on {log_line["os_version"]} - Incident ID: {log_line.get("incident_id", "unknown")} name: {ips_file_name} "
+                                f"Process '{log_line.get('name', ips_file_name)}' crashed (Bug Type: {log_line.get('bug_type', 'unknown')}) "
+                                f"on {log_line['os_version']} - Incident ID: {log_line.get('incident_id', 'unknown')} name: {ips_file_name} "
                             ),
                         }
                     )
