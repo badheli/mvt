@@ -102,7 +102,7 @@ class CrashReporterLog(IOSExtraction):
                             "event": "crashreporter_activity",
                             "data": (
                                 f"Process '{log_line.get("name", ips_file_name)}' crashed (Bug Type: {log_line.get("bug_type", "unknown")}) "
-                                f"on {log_line["os_version"]} - Incident ID: {log_line.get("incident_id", "unknown")}"
+                                f"on {log_line["os_version"]} - Incident ID: {log_line.get("incident_id", "unknown")} name: {ips_file_name} "
                             ),
                         }
                     )
