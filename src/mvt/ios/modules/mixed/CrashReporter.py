@@ -101,8 +101,9 @@ class CrashReporterLog(IOSExtraction):
                         if not bundleID.startswith("com.apple."):
                             isSystemProcess = False
                     except Exception as e:
+                        pass
                         # self.log.error("Failed to parse bundleID (%s) path: (%s)", str(e),ips_file_name)
-                        continue                    
+                        # continue                    
 
                     timestamp_utc = timestamp.astimezone(datetime.timezone.utc)
                     self.results.append(
