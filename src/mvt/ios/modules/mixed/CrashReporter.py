@@ -129,9 +129,9 @@ class CrashReporterLog(IOSExtraction):
 
                 self.log.info("Processing diagnostic log file from config: %s", os.environ[DIAGNOSTIC_LOGS_PATH])
 
-                # 处理 os.environ[DIAGNOSTIC_LOGS_PATH] 下的 ips
+                # parse os.environ[DIAGNOSTIC_LOGS_PATH] ips
                 self.process_sysdiagnose_log(os.environ[DIAGNOSTIC_LOGS_PATH], CRASH_REPORTER_LOG_PATHS) 
-                # 处理 sysdiagnose 日志中的 ips
+                # parse sysdiagnose ips
                 for found_path in self._get_files_from_patterns(os.environ[DIAGNOSTIC_LOGS_PATH], SYSDIAGNOSE_PATH):
                     # DiagnosticLogs/sysdiagnose/sysdiagnose_2025.05.13_14-38-43+0800_iPhone-OS_iPhone_22E252.tar.gz
                     self.log.info("Found sysdiagnose log at path: %s", found_path)
