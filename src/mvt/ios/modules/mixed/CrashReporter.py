@@ -51,6 +51,8 @@ TIME_FORMATS = [
     "%Y-%m-%d %H:%M:%SZ",            # 2025-08-28 04:36:25Z
     "%Y-%m-%d %H:%M:%S.%f%z",        # 2023-12-30 00:37:44+0800
     "%Y-%m-%d %H:%M:%S%z",           # 2025-09-08 21:58:56+0800
+    "%Y-%m-%d_%H:%M:%S",             # 2025-11-12_16:13:41
+    "%Y-%m-%d %H:%M:%S %z",          # 2022-01-13 14:04:21 +0000
 ]
 
 SYSLOG_TIME_REGEX = re.compile(
@@ -67,6 +69,12 @@ SYSLOG_TIME_REGEX = re.compile(
         |
         # 4. 2023-12-30 00:37:44+0800  
         \d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?\+\d{4}
+        |
+        # 5. 2025-11-12_16:13:41
+        \d{4}-\d{2}-\d{2}_\d{2}:\d{2}:\d{2}
+        |
+        # 6. 2022-01-13 14:04:21 +0000
+        \d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s+\+\d{4}
     )
     """,
     re.VERBOSE,
@@ -180,7 +188,6 @@ class CrashReporterLog(IOSExtraction):
                 self.log.info("Found sysdiagnose log at path: %s", log_file_name)
                 with open(log_file, "rb") as log_file_content:
                     content = log_file_content.read().decode('utf-8', errors='ignore')
-                    # lines = content.split("\n")
                     try:
                         for line in content.split("\n"):
                             line = line.strip()
