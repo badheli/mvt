@@ -21,10 +21,6 @@ from .base import AndroidQFModule
 class SMS(AndroidQFModule):
     """
     This module analyse SMS file in backup
-
-    XXX: We should also de-duplicate this AQF module, but first we
-    need to add tests for loading encrypted SMS backups through the backup
-    sub-module.
     """
 
     def __init__(
@@ -53,8 +49,11 @@ class SMS(AndroidQFModule):
             if "body" not in message:
                 continue
 
-            if self.indicators.check_domains(message.get("links", [])):
-                self.detected.append(message)
+            ioc_match = self.indicators.check_domains(message.get("links", []))
+            if ioc_match:
+                self.alertstore.critical(
+                    ioc_match.message, "", message, matched_indicator=ioc_match.ioc
+                )
 
     def parse_backup(self, data):
         header = parse_ab_header(data)
