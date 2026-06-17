@@ -99,6 +99,29 @@ class FilesystemMetaLog(IOSExtraction):
             "data": data,
         }
     
+    def check_indicators(self) -> None:
+        if not self.indicators:
+            return
+
+        for result in self.results:
+            if "Path" not in result:
+                continue
+
+            ioc_match = self.indicators.check_file_path(result["Path"])
+            if ioc_match:
+                self.alertstore.high(
+                    ioc_match.message, "", result, matched_indicator=ioc_match.ioc
+                )
+
+            if self.module_options.get("fast_mode", None):
+                continue
+
+            ioc_match = self.indicators.check_file_path_process(result["Path"])
+            if ioc_match:
+                self.alertstore.high(
+                    ioc_match.message, "", result, matched_indicator=ioc_match.ioc
+                )
+
     def _get_files_from_patterns(self, target_path: str, root_paths: list) -> Iterator[str]:
         for root_path in root_paths:
             for found_path in glob.glob(os.path.join(target_path, root_path), recursive=True):
