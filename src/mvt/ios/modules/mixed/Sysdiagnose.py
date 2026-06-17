@@ -13,13 +13,18 @@ from typing import Iterator, Optional, Union
 
 from ..base import IOSExtraction
 from mvt.common.utils import convert_datetime_to_iso
-from .CrashReporter import TIME_FORMATS, parse_timestamp
+from .CrashReporter import TIME_FORMATS, parse_timestamp, parse_ips_files
 
 SYSDIAGNOSE_LOG_PATHS = [
     "**/*.log",
     "*.log",
     "**/*.log.*",
     "*.log.*",
+]
+
+SYSDIAGNOSE_IPS_PATTERNS = [
+    "**/*.ips",
+    "*.ips",
 ]
 
 SYSDIAGNOSE_PATH = [
@@ -193,6 +198,21 @@ class SysdiagnoseLog(IOSExtraction):
                             tmp_dir,
                             found_path.split("/")[-1].replace(".tar.gz", ""),
                         )
+
+                        # Parse system logs
                         self.process_sysdiagnose_logs(extracted_path)
+
+                        # Also parse .ips crash reports bundled inside the archive
+                        ips_count = parse_ips_files(
+                            extracted_path,
+                            SYSDIAGNOSE_IPS_PATTERNS,
+                            self.results,
+                            self.log,
+                        )
+                        if ips_count:
+                            self.log.info(
+                                "Parsed %d IPS files from sysdiagnose archive",
+                                ips_count,
+                            )
 
         self.results = sorted(self.results, key=lambda entry: entry["timestamp"])

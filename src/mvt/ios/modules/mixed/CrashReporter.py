@@ -83,6 +83,122 @@ def parse_timestamp(line: str):
 
     return None
 
+def parse_ips_files(target_path, patterns, results, log):
+    """Parse .ips crash report files from a directory tree.
+
+    Scans target_path with the given glob patterns, parses each .ips file,
+    and appends records to the results list.  Returns the number of files
+    successfully parsed.
+    """
+    count = 0
+    for file_pattern in patterns:
+        for ips_file in glob.glob(
+            os.path.join(target_path, file_pattern), recursive=True
+        ):
+            if not os.path.exists(ips_file):
+                continue
+
+            ips_file_name = ips_file.split("/")[-1]
+            log.info("Found IPS crash report: %s", ips_file_name)
+
+            with open(ips_file, "rb") as fh:
+                content = fh.read().decode("utf-8", errors="ignore")
+                lines = content.split("\n")
+
+            try:
+                log_line = loads(lines[0])
+            except (JSONDecodeError, IndexError) as e:
+                log.error(
+                    "Failed to parse IPS JSON (%s) path: %s", str(e), ips_file_name
+                )
+                continue
+
+            if not isinstance(log_line, dict):
+                log.error("IPS first line is not a JSON object: %s", ips_file_name)
+                continue
+
+            # Parse timestamp — IPS always carries a timezone offset
+            timestamp = None
+            for ts_field in ("timestamp", "captureTime", "date"):
+                if ts_field not in log_line:
+                    continue
+                ts_value = str(log_line[ts_field])
+                for fmt in TIME_FORMATS:
+                    try:
+                        ts = datetime.datetime.strptime(ts_value, fmt)
+                        if ts.tzinfo is not None:
+                            timestamp = ts
+                            break
+                    except (ValueError, TypeError):
+                        continue
+                if timestamp:
+                    break
+
+            if timestamp is None:
+                log.error(
+                    "Failed to parse timestamp in IPS: %s (value: %s)",
+                    ips_file_name,
+                    log_line.get(
+                        "timestamp", log_line.get("captureTime", "missing")
+                    ),
+                )
+                continue
+
+            bundle_id = log_line.get("bundleID", "")
+            is_system = bool(bundle_id and bundle_id.startswith("com.apple."))
+
+            exception_info = log_line.get("exception", {})
+            termination_info = log_line.get("termination", {})
+
+            timestamp_utc = timestamp.astimezone(datetime.timezone.utc)
+            record = {
+                "timestamp": convert_datetime_to_iso(timestamp_utc),
+                "event": (
+                    "system_crashreporter_activity"
+                    if is_system
+                    else "crashreporter_activity"
+                ),
+                "data": (
+                    f"Process '{log_line.get('name', ips_file_name)}' crashed "
+                    f"(Bug Type: {log_line.get('bug_type', 'unknown')}, "
+                    f"BundleID: {bundle_id or 'N/A'}) "
+                    f"on {log_line.get('os_version', 'unknown')} "
+                    f"- Incident ID: {log_line.get('incident_id', 'unknown')}"
+                ),
+                "BundleID": bundle_id,
+                "ProcessName": log_line.get("name", ips_file_name),
+                "BugType": str(log_line.get("bug_type", "")),
+                "OSVersion": log_line.get("os_version", ""),
+                "IncidentID": log_line.get("incident_id", ""),
+                "IPSFile": ips_file_name,
+            }
+
+            if exception_info:
+                exc_type = exception_info.get("type", "")
+                exc_signal = exception_info.get("signal", "")
+                if exc_type or exc_signal:
+                    record["ExceptionType"] = exc_type
+                    record["ExceptionSignal"] = exc_signal
+                    record["data"] += (
+                        f", Exception: {exc_type}"
+                        + (f"/{exc_signal}" if exc_signal else "")
+                    )
+
+            if termination_info:
+                term_reason = termination_info.get("reason", "")
+                if term_reason:
+                    record["TerminationReason"] = term_reason
+
+            triggered_by = log_line.get("triggered_by", "")
+            if triggered_by:
+                record["TriggeredBy"] = triggered_by
+
+            results.append(record)
+            count += 1
+
+    return count
+
+
 class CrashReporterLog(IOSExtraction):
     """Extracts and processes CrashReporter log files from iOS devices."""
 
@@ -125,109 +241,9 @@ class CrashReporterLog(IOSExtraction):
     
 
     def process_sysdiagnose_ips(self, extracted_path: str, patterns: list) -> None:
-        """Parse .ips (iOS crash report) files, extracting key fields."""
-        self.log.info("Processing IPS crash reports at path: %s", extracted_path)
-        for ips_file in self._get_files_from_patterns(extracted_path, patterns):
-            ips_file_name = ips_file.split("/")[-1]
-            self.log.info("Found IPS crash report: %s", ips_file_name)
-
-            # Read and parse first line as JSON
-            with open(ips_file, "rb") as crash_report_log:
-                content = crash_report_log.read().decode("utf-8", errors="ignore")
-                lines = content.split("\n")
-
-            log_line = None
-            try:
-                log_line = loads(lines[0])
-            except (JSONDecodeError, IndexError) as e:
-                self.log.error("Failed to parse IPS JSON (%s) path: %s", str(e), ips_file_name)
-                continue
-
-            if not isinstance(log_line, dict):
-                self.log.error("IPS first line is not a JSON object: %s", ips_file_name)
-                continue
-
-            # Parse timestamp — IPS always carries a timezone offset
-            timestamp = None
-            for ts_field in ("timestamp", "captureTime", "date"):
-                if ts_field not in log_line:
-                    continue
-                ts_value = str(log_line[ts_field])
-                for fmt in TIME_FORMATS:
-                    try:
-                        ts = datetime.datetime.strptime(ts_value, fmt)
-                        if ts.tzinfo is not None:
-                            timestamp = ts
-                            break
-                    except (ValueError, TypeError):
-                        continue
-                if timestamp:
-                    break
-
-            if timestamp is None:
-                self.log.error(
-                    "Failed to parse timestamp in IPS: %s (value: %s)",
-                    ips_file_name,
-                    log_line.get("timestamp", log_line.get("captureTime", "missing")),
-                )
-                continue
-
-            # Classify: system process / third-party / no bundleID
-            bundle_id = log_line.get("bundleID", "")
-            is_system = False
-            if bundle_id:
-                is_system = bundle_id.startswith("com.apple.")
-
-            exception_info = log_line.get("exception", {})
-            termination_info = log_line.get("termination", {})
-
-            timestamp_utc = timestamp.astimezone(datetime.timezone.utc)
-            record = {
-                "timestamp": convert_datetime_to_iso(timestamp_utc),
-                "event": (
-                    "system_crashreporter_activity"
-                    if is_system
-                    else "crashreporter_activity"
-                ),
-                "data": (
-                    f"Process '{log_line.get('name', ips_file_name)}' crashed "
-                    f"(Bug Type: {log_line.get('bug_type', 'unknown')}, "
-                    f"BundleID: {bundle_id or 'N/A'}) "
-                    f"on {log_line.get('os_version', 'unknown')} "
-                    f"- Incident ID: {log_line.get('incident_id', 'unknown')}"
-                ),
-                "BundleID": bundle_id,
-                "ProcessName": log_line.get("name", ips_file_name),
-                "BugType": str(log_line.get("bug_type", "")),
-                "OSVersion": log_line.get("os_version", ""),
-                "IncidentID": log_line.get("incident_id", ""),
-                "IPSFile": ips_file_name,
-            }
-
-            # Exception details
-            if exception_info:
-                exc_type = exception_info.get("type", "")
-                exc_signal = exception_info.get("signal", "")
-                if exc_type or exc_signal:
-                    record["ExceptionType"] = exc_type
-                    record["ExceptionSignal"] = exc_signal
-                    record["data"] += (
-                        f", Exception: {exc_type}"
-                        + (f"/{exc_signal}" if exc_signal else "")
-                    )
-
-            # Termination reason
-            if termination_info:
-                term_reason = termination_info.get("reason", "")
-                if term_reason:
-                    record["TerminationReason"] = term_reason
-
-            # Triggered by
-            triggered_by = log_line.get("triggered_by", "")
-            if triggered_by:
-                record["TriggeredBy"] = triggered_by
-
-            self.results.append(record)
+        """Parse .ips files and append results to self.results."""
+        count = parse_ips_files(extracted_path, patterns, self.results, self.log)
+        self.log.info("Parsed %d IPS crash reports at path: %s", count, extracted_path)
 
     def check_indicators(self) -> None:
         if not self.indicators:
