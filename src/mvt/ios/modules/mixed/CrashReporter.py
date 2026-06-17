@@ -13,7 +13,7 @@ from pathlib import Path
 import datetime
 from ..base import IOSExtraction
 from mvt.common.utils import convert_datetime_to_iso
-from typing import Iterator, Optional, Union,Optional, Union, Dict, List
+from typing import Iterator, Optional, Union
 
 CRASH_REPORTER_LOG_FS_PATHS = [
     # check fs 
@@ -136,80 +136,167 @@ class CrashReporterLog(IOSExtraction):
         }
     
 
-    def process_sysdiagnose_ips(self, extracted_path: str , patterns: list) -> None:
-            # Process each .fslisting file
-            self.log.info("Processing sysdiagnose ips at path: %s", extracted_path)
-            for ips_file in self._get_files_from_patterns(extracted_path,patterns):
-                ips_file_name = ips_file.split("/")[-1]
-                self.log.info("Found CrashReporter ips at path: %s", ips_file_name)
-                with open(ips_file, "rb") as crash_report_log:
-                    content = crash_report_log.read().decode('utf-8', errors='ignore')
-                    lines = content.split("\n")
-                    try:
-                        log_line = loads(lines[0])
-                    except Exception as e:
-                        self.log.error("Failed to parse CrashReporter log (%s) path: (%s)", str(e),ips_file_name)
-                    
-                    try:
-                        timestamp = datetime.datetime.strptime(
-                            log_line["timestamp"], "%Y-%m-%d %H:%M:%S.%f %z"
-                        )
-                    except Exception as e:
-                        self.log.error("Failed to parse timestamp (%s) path: (%s)", str(e),ips_file_name)
-                        continue
+    def process_sysdiagnose_ips(self, extracted_path: str, patterns: list) -> None:
+        """解析 .ips (iOS IPS 崩溃报告) 文件，提取关键字段。"""
+        self.log.info("Processing IPS crash reports at path: %s", extracted_path)
+        for ips_file in self._get_files_from_patterns(extracted_path, patterns):
+            ips_file_name = ips_file.split("/")[-1]
+            self.log.info("Found IPS crash report: %s", ips_file_name)
 
-                    try:
-                        isSystemProcess = True
-                        bundleID = log_line["bundleID"]
-                        if not bundleID.startswith("com.apple."):
-                            isSystemProcess = False
-                    except Exception as e:
-                        pass
-                        # self.log.error("Failed to parse bundleID (%s) path: (%s)", str(e),ips_file_name)
-                        # continue                    
+            # 读取并解析 JSON 首行
+            with open(ips_file, "rb") as crash_report_log:
+                content = crash_report_log.read().decode("utf-8", errors="ignore")
+                lines = content.split("\n")
 
-                    timestamp_utc = timestamp.astimezone(datetime.timezone.utc)
-                    self.results.append(
-                        {
-                            "timestamp": convert_datetime_to_iso(timestamp_utc),
-                            "event": "system_crashreporter_activity" if isSystemProcess else "crashreporter_activity",
-                            "data": (
-                                f"Process '{log_line.get('name', ips_file_name)}' crashed (Bug Type: {log_line.get('bug_type', 'unknown')}) "
-                                f"on {log_line['os_version']} - Incident ID: {log_line.get('incident_id', 'unknown')} name: {ips_file_name} "
-                            ),
-                        }
+            log_line = None
+            try:
+                log_line = loads(lines[0])
+            except (JSONDecodeError, IndexError) as e:
+                self.log.error("Failed to parse IPS JSON (%s) path: %s", str(e), ips_file_name)
+                continue
+
+            if not isinstance(log_line, dict):
+                self.log.error("IPS first line is not a JSON object: %s", ips_file_name)
+                continue
+
+            # 解析时间戳
+            timestamp = None
+            for ts_field in ("timestamp", "captureTime", "date"):
+                if ts_field in log_line:
+                    for fmt in TIME_FORMATS:
+                        try:
+                            timestamp = datetime.datetime.strptime(log_line[ts_field], fmt)
+                            break
+                        except (ValueError, TypeError):
+                            continue
+                if timestamp:
+                    break
+
+            if timestamp is None:
+                self.log.error(
+                    "Failed to parse timestamp in IPS: %s (value: %s)",
+                    ips_file_name,
+                    log_line.get("timestamp", log_line.get("captureTime", "missing")),
+                )
+                continue
+
+            # 分类：系统进程 / 第三方进程 / 无 bundleID
+            bundle_id = log_line.get("bundleID", "")
+            is_system = False
+            if bundle_id:
+                is_system = bundle_id.startswith("com.apple.")
+
+            exception_info = log_line.get("exception", {})
+            termination_info = log_line.get("termination", {})
+
+            timestamp_utc = timestamp.astimezone(datetime.timezone.utc)
+            record = {
+                "timestamp": convert_datetime_to_iso(timestamp_utc),
+                "event": (
+                    "system_crashreporter_activity"
+                    if is_system
+                    else "crashreporter_activity"
+                ),
+                "data": (
+                    f"Process '{log_line.get('name', ips_file_name)}' crashed "
+                    f"(Bug Type: {log_line.get('bug_type', 'unknown')}, "
+                    f"BundleID: {bundle_id or 'N/A'}) "
+                    f"on {log_line.get('os_version', 'unknown')} "
+                    f"- Incident ID: {log_line.get('incident_id', 'unknown')}"
+                ),
+                "BundleID": bundle_id,
+                "ProcessName": log_line.get("name", ips_file_name),
+                "BugType": str(log_line.get("bug_type", "")),
+                "OSVersion": log_line.get("os_version", ""),
+                "IncidentID": log_line.get("incident_id", ""),
+                "IPSFile": ips_file_name,
+            }
+
+            # 异常详情
+            if exception_info:
+                exc_type = exception_info.get("type", "")
+                exc_signal = exception_info.get("signal", "")
+                if exc_type or exc_signal:
+                    record["ExceptionType"] = exc_type
+                    record["ExceptionSignal"] = exc_signal
+                    record["data"] += (
+                        f", Exception: {exc_type}"
+                        + (f"/{exc_signal}" if exc_signal else "")
                     )
 
-    def process_sysdiagnose_log(self, extracted_path: str , patterns: list) -> None:
-            # Process each .fslisting file
-            self.log.info("Processing sysdiagnose log at path: %s", extracted_path)
-            for log_file in self._get_files_from_patterns(extracted_path,patterns):
-                log_file_name = log_file.split("/")[-1]
-                self.log.info("Found sysdiagnose log at path: %s", log_file_name)
-                with open(log_file, "rb") as log_file_content:
-                    content = log_file_content.read().decode('utf-8', errors='ignore')
-                    try:
-                        for line in content.split("\n"):
-                            line = line.strip()
-                            if not line:
-                                continue
-                            timestamp = parse_timestamp(line)
-                            if not timestamp:
-                                continue
-                            timestamp_utc = timestamp.astimezone(datetime.timezone.utc)
-                            self.results.append(
-                                {
-                                    "timestamp": convert_datetime_to_iso(timestamp_utc),
-                                    "event": "sysdiagnose_log_activity",
-                                    "data": (
-                                        f"{log_file_name} : {line} "
-                                    ),
-                                }
-                            )
-                    except Exception as e:
-                        self.log.error("Failed to parse sysdiagnose log (%s) path: (%s)", str(e),log_file_name)
-                        continue
-                    
+            # 终止原因
+            if termination_info:
+                term_reason = termination_info.get("reason", "")
+                if term_reason:
+                    record["TerminationReason"] = term_reason
+
+            # 触发进程
+            triggered_by = log_line.get("triggered_by", "")
+            if triggered_by:
+                record["TriggeredBy"] = triggered_by
+
+            self.results.append(record)
+
+    def process_sysdiagnose_log(self, extracted_path: str, patterns: list) -> None:
+        """解析 sysdiagnose 系统日志文件，逐行提取带时间戳的记录。"""
+        self.log.info("Processing sysdiagnose log at path: %s", extracted_path)
+        for log_file in self._get_files_from_patterns(extracted_path, patterns):
+            log_file_name = log_file.split("/")[-1]
+            self.log.info("Found sysdiagnose log: %s", log_file_name)
+            with open(log_file, "rb") as log_file_content:
+                content = log_file_content.read().decode("utf-8", errors="ignore")
+                try:
+                    for line in content.split("\n"):
+                        line = line.strip()
+                        if not line:
+                            continue
+                        timestamp = parse_timestamp(line)
+                        if not timestamp:
+                            continue
+                        timestamp_utc = timestamp.astimezone(datetime.timezone.utc)
+                        self.results.append(
+                            {
+                                "timestamp": convert_datetime_to_iso(timestamp_utc),
+                                "event": "sysdiagnose_log_activity",
+                                "data": f"{log_file_name} : {line}",
+                            }
+                        )
+                except Exception as e:
+                    self.log.error(
+                        "Failed to parse sysdiagnose log (%s) path: %s",
+                        str(e),
+                        log_file_name,
+                    )
+
+    def check_indicators(self) -> None:
+        if not self.indicators:
+            return
+
+        for result in self.results:
+            # 检查崩溃进程的 BundleID 是否为已知恶意应用
+            bundle_id = result.get("BundleID")
+            if bundle_id:
+                ioc_match = self.indicators.check_process(bundle_id)
+                if ioc_match:
+                    self.alertstore.high(
+                        ioc_match.message, "", result, matched_indicator=ioc_match.ioc
+                    )
+                    continue
+
+                ioc_match = self.indicators.check_app_id(bundle_id)
+                if ioc_match:
+                    self.alertstore.high(
+                        ioc_match.message, "", result, matched_indicator=ioc_match.ioc
+                    )
+
+            # 检查 ProcessName 是否为已知恶意进程
+            process_name = result.get("ProcessName")
+            if process_name:
+                ioc_match = self.indicators.check_process(process_name)
+                if ioc_match:
+                    self.alertstore.high(
+                        ioc_match.message, "", result, matched_indicator=ioc_match.ioc
+                    )
 
 
     def run(self) -> None:
