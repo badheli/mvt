@@ -79,12 +79,24 @@ class FilesystemMetaLog(IOSExtraction):
         )
 
     def serialize(self, record: dict) -> Union[dict, list]:
+        data = (
+            f"{record.get('Path', 'Unknown path')} modified at {record.get('timestamp', 'Unknown time')}, "
+            f"size: {record.get('FileSize', 'Unknown size')}, mode: {record.get('Mode', 'Unknown mode')}"
+        )
+        if record.get("AccessTime"):
+            data += f", accessed at {record['AccessTime']}"
+        if record.get("UID") is not None:
+            data += f", uid: {record['UID']}"
+        if record.get("GID") is not None:
+            data += f", gid: {record['GID']}"
+        if record.get("InodeID") is not None:
+            data += f", inode: {record['InodeID']}"
+
         return {
             "timestamp": record["timestamp"],
             "module": self.__class__.__name__,
             "event": "file_system_mate_activity",
-            "data": f"{record.get('Path', 'Unknown path')} modified at {record.get('timestamp', 'Unknown time')}, "
-                    f"size: {record.get('FileSize', 'Unknown size')}, mode: {record.get('Mode', 'Unknown mode')}",
+            "data": data,
         }
     
     def _get_files_from_patterns(self, target_path: str, root_paths: list) -> Iterator[str]:
@@ -95,62 +107,130 @@ class FilesystemMetaLog(IOSExtraction):
 
                 yield found_path
 
+    def _parse_column_map(self, line):
+        """解析列标题行，返回列名到索引的映射。
+
+        通过动态解析列标题行来确定各列的索引位置，
+        兼容不同 iOS 版本的 fslisting 格式差异。
+        iOS 26 新增了 atime 和 Inode-ID 列。
+        """
+        headers = line.strip().split('\t')
+        return {header.strip(): idx for idx, header in enumerate(headers)}
+
+    def _get_column_indices(self, column_map):
+        """从列映射中获取各字段的索引，缺失时使用旧格式默认值。"""
+        return {
+            'size_on_disk': column_map.get('Size-On-Disk', 0),
+            'file_size': column_map.get('File-Size', 1),
+            'flags': column_map.get('FS-Purgeable-Flags', 3),
+            'atime': column_map.get('atime', -1),
+            'mtime': column_map.get('mtime', 4),
+            'mode': column_map.get('Mode', 5),
+            'uid': column_map.get('UID', 6),
+            'gid': column_map.get('GID', 7),
+            'inode': column_map.get('Inode-ID', -1),
+            'path': column_map.get('Path', 8),
+        }
+
     def process_file_system_mate_log(self, content):
         in_data_section = False
+        column_map = None
+
+        # 旧格式默认列映射 (回退方案)
+        DEFAULT_COLUMN_MAP = {
+            'Size-On-Disk': 0, 'File-Size': 1, 'Compression': 2,
+            'FS-Purgeable-Flags': 3, 'mtime': 4, 'Mode': 5,
+            'UID': 6, 'GID': 7, 'Path': 8,
+        }
+
         for line in content.split("\n"):
-            line = line.strip()
-            if not line:
+            line_stripped = line.strip()
+            if not line_stripped:
                 continue
-            
+
             # 头部处理
             if not in_data_section:
-                if line.strip() == '<BEGIN>':
+                if line_stripped == '<BEGIN>':
                     in_data_section = True
+                    # 未找到列标题时使用旧格式默认映射
+                    if column_map is None:
+                        column_map = DEFAULT_COLUMN_MAP
+                    continue
+
+                # 动态解析列标题行 (兼容新旧格式)
+                if 'Size-On-Disk' in line_stripped and 'Path' in line_stripped:
+                    column_map = self._parse_column_map(line_stripped)
                 continue
-            
-            # 数据部分处理
+
+            indices = self._get_column_indices(column_map)
             columns = line.split('\t')
-            if len(columns) < 9:
+
+            # 确保列数足够
+            max_idx = max(v for v in indices.values() if v >= 0)
+            if len(columns) <= max_idx:
                 continue
-            
-            
-            # Size-On-Disk (第0列)
+
+            # File-Size
             try:
-                size_on_disk = int(columns[0])
-                columns[0] = human_readable_size(size_on_disk)
-            except ValueError:
-                pass
-            
-            # File-Size (第1列)
-            try:
-                file_size = int(columns[1])
+                file_size = int(columns[indices['file_size']])
                 file_size_str = human_readable_size(file_size)
-            except ValueError:
-                pass
-            
-            # mtime (第4列)
+            except (ValueError, IndexError):
+                file_size_str = "Unknown"
+
+            # mtime
             try:
-                timestamp = int(columns[4])
-            except ValueError:
-                pass
-            
-            # Mode (第5列)
+                timestamp = int(columns[indices['mtime']])
+            except (ValueError, IndexError):
+                continue
+
+            # Mode
             try:
-                mode = int(columns[5])
+                mode = int(columns[indices['mode']])
                 mode_str = mode_to_linux_format(mode)
-            except ValueError:
-                pass
-            
-            # FS-Purgeable-Flags (第3列): 保留原值
-            # 含义：0表示不可清除，非0表示可清除
-            
+            except (ValueError, IndexError):
+                mode_str = "Unknown"
+
+            # Path
             try:
-                self.results.append({
-                    "timestamp": convert_mactime_to_iso(timestamp=timestamp,from_2001=False),
-                    "FileSize": file_size_str,
-                    "Mode": mode_str,
-                    "Path": columns[8],
-                })
+                path = columns[indices['path']]
+            except IndexError:
+                continue
+
+            record = {
+                "timestamp": convert_mactime_to_iso(timestamp=timestamp, from_2001=False),
+                "FileSize": file_size_str,
+                "Mode": mode_str,
+                "Path": path,
+            }
+
+            # iOS 26 新增字段
+            if indices['atime'] >= 0:
+                try:
+                    atime = int(columns[indices['atime']])
+                    record["AccessTime"] = convert_mactime_to_iso(timestamp=atime, from_2001=False)
+                except (ValueError, IndexError):
+                    pass
+
+            if indices['inode'] >= 0:
+                try:
+                    record["InodeID"] = int(columns[indices['inode']])
+                except (ValueError, IndexError):
+                    pass
+
+            if indices['uid'] >= 0:
+                try:
+                    record["UID"] = int(columns[indices['uid']])
+                except (ValueError, IndexError):
+                    pass
+
+            if indices['gid'] >= 0:
+                try:
+                    record["GID"] = int(columns[indices['gid']])
+                except (ValueError, IndexError):
+                    pass
+
+            try:
+                self.results.append(record)
             except Exception as e:
                 self.log.error("Failed to parse FilesystemMeta log (%s)", str(e))
 
