@@ -88,10 +88,21 @@ class FilesystemMetaLog(IOSExtraction):
         )
 
     def serialize(self, record: dict) -> Union[dict, list]:
-        data = (
-            f"{record.get('Path', 'Unknown path')} modified at {record.get('timestamp', 'Unknown time')}, "
-            f"size: {record.get('FileSize', 'Unknown size')}, mode: {record.get('Mode', 'Unknown mode')}"
-        )
+        path = record.get("Path", "Unknown path")
+        ts = record.get("timestamp", "Unknown time")
+        size = record.get("FileSize", "Unknown size")
+        mode = record.get("Mode", "Unknown mode")
+
+        if record.get("TagOwner"):
+            data = (
+                f"{path} (tagged by {record['TagOwner']}) "
+                f"modified at {ts}, size: {size}, mode: {mode}"
+            )
+        else:
+            data = (
+                f"{path} modified at {ts}, size: {size}, mode: {mode}"
+            )
+
         if record.get("AccessTime"):
             data += f", accessed at {record['AccessTime']}"
         if record.get("UID") is not None:
@@ -100,8 +111,6 @@ class FilesystemMetaLog(IOSExtraction):
             data += f", gid: {record['GID']}"
         if record.get("InodeID") is not None:
             data += f", inode: {record['InodeID']}"
-        if record.get("TagOwner"):
-            data += f", tag_owner: {record['TagOwner']}"
         if record.get("SAFDirStats") is not None:
             data += f", dir_stats: {record['SAFDirStats']}"
         if record.get("PurgeableFlags") is not None:
