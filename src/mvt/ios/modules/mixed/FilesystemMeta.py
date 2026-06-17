@@ -95,7 +95,7 @@ class FilesystemMetaLog(IOSExtraction):
 
         if record.get("TagOwner"):
             data = (
-                f"{path} (tagged by {record['TagOwner']}) "
+                f"[tagged by {record['TagOwner']}] {path} "
                 f"modified at {ts}, size: {size}, mode: {mode}"
             )
         else:
