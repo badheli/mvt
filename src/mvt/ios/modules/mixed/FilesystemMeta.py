@@ -17,6 +17,15 @@ FILE_SYSTEM_MATE_LOG_PATHS = [
     "FilesystemMeta-*.fsmeta.tgz",
 ]
 
+# fsmeta 解压后目录中的各类 listing 文件扩展名
+LISTING_FILE_TYPES = {
+    ".fslisting": "fslisting",
+    ".attrstaglisting": "attrstag",
+    ".dirstatsdatalisting": "dirstats",
+    ".purgeablerecordslisting": "purgeable",
+    ".sharedextentslisting": "sharedextents",
+}
+
 DIAGNOSTIC_LOGS_PATH = "DIAGNOSTIC_LOGS_PATH"
 
 
@@ -91,6 +100,16 @@ class FilesystemMetaLog(IOSExtraction):
             data += f", gid: {record['GID']}"
         if record.get("InodeID") is not None:
             data += f", inode: {record['InodeID']}"
+        if record.get("TagOwner"):
+            data += f", tag_owner: {record['TagOwner']}"
+        if record.get("SAFDirStats") is not None:
+            data += f", dir_stats: {record['SAFDirStats']}"
+        if record.get("PurgeableFlags") is not None:
+            data += f", purgeable_flags: {record['PurgeableFlags']}"
+        if record.get("PurgeableSize") is not None:
+            data += f", purgeable_size: {record['PurgeableSize']}"
+        if record.get("SharedExtentCount") is not None:
+            data += f", shared_extents: {record['SharedExtentCount']}"
 
         return {
             "timestamp": record["timestamp"],
@@ -120,6 +139,157 @@ class FilesystemMetaLog(IOSExtraction):
             if ioc_match:
                 self.alertstore.high(
                     ioc_match.message, "", result, matched_indicator=ioc_match.ioc
+                )
+
+            # 检查 TagOwner (来自 .attrstaglisting) 是否为已知恶意进程
+            if result.get("TagOwner"):
+                ioc_match = self.indicators.check_process(result["TagOwner"])
+                if ioc_match:
+                    self.alertstore.high(
+                        ioc_match.message, "", result, matched_indicator=ioc_match.ioc
+                    )
+
+    def _parse_simple_listing(self, content, expected_cols):
+        """通用简单 listing 解析器。
+
+        跳过头部直到 <BEGIN>，然后按 tab 分割每行，
+        返回列数足够的行列表。
+        """
+        rows = []
+        in_data_section = False
+        for line in content.split("\n"):
+            line_stripped = line.strip()
+            if not line_stripped:
+                continue
+            if not in_data_section:
+                if line_stripped == '<BEGIN>':
+                    in_data_section = True
+                continue
+            columns = line_stripped.split('\t')
+            if len(columns) >= expected_cols:
+                rows.append(columns)
+        return rows
+
+    def process_attrstag_listing(self, content):
+        """解析 .attrstaglisting：Tag-Owner, Tag-Hash, Path
+
+        返回以 Path 为键的字典，值为 TagOwner 和 TagHash。
+        """
+        tag_by_path = {}
+        for columns in self._parse_simple_listing(content, 3):
+            path = columns[2]
+            try:
+                tag_by_path[path] = {
+                    "TagOwner": columns[0],
+                    "TagHash": int(columns[1]),
+                }
+            except (ValueError, IndexError):
+                pass
+        self.log.info("Parsed %d attrstag entries", len(tag_by_path))
+        return tag_by_path
+
+    def process_dirstats_listing(self, content):
+        """解析 .dirstatsdatalisting：Path, SAFDirStats
+
+        返回以 Path 为键的字典，值为 SAFDirStats 标志。
+        """
+        stats_by_path = {}
+        for columns in self._parse_simple_listing(content, 2):
+            path = columns[0]
+            try:
+                stats_by_path[path] = int(columns[1])
+            except (ValueError, IndexError):
+                pass
+        self.log.info("Parsed %d dirstats entries", len(stats_by_path))
+        return stats_by_path
+
+    def process_purgeable_listing(self, content):
+        """解析 .purgeablerecordslisting：Inode-Number, Purgeable-Flags,
+        Last-Access-Time, Purgeable-Size
+
+        返回以 Inode-Number 为键的字典。
+        """
+        purgeable_by_inode = {}
+        for columns in self._parse_simple_listing(content, 4):
+            try:
+                inode = int(columns[0])
+                purgeable_by_inode[inode] = {
+                    "PurgeableFlags": int(columns[1]),
+                    "LastAccessTime": int(columns[2]),
+                    "PurgeableSize": int(columns[3]),
+                }
+            except (ValueError, IndexError):
+                pass
+        self.log.info("Parsed %d purgeable entries", len(purgeable_by_inode))
+        return purgeable_by_inode
+
+    def process_sharedextents_listing(self, content):
+        """解析 .sharedextentslisting：Physical-Block-Number, Owning-Obj-Id,
+        Size, Reference-Count
+
+        返回记录列表，同时建一个以 Owning-Obj-Id 为键的索引供关联查询。
+        """
+        extents = []
+        for columns in self._parse_simple_listing(content, 4):
+            try:
+                extents.append({
+                    "PhysicalBlockNumber": int(columns[0]),
+                    "OwningObjId": int(columns[1]),
+                    "Size": int(columns[2]),
+                    "ReferenceCount": int(columns[3]),
+                })
+            except (ValueError, IndexError):
+                pass
+        self.log.info("Parsed %d shared extent entries", len(extents))
+        return extents
+
+    def _enrich_results(self, tag_by_path, stats_by_path,
+                         purgeable_by_inode, extent_list):
+        """将附加 listing 数据合并到 fslisting 结果中。
+
+        通过 Path 关联 attrstag 和 dirstats，
+        通过 InodeID 关联 purgeable 记录，
+        通过 InodeID 关联 shared extents（OwningObjId ↔ InodeID）。
+        """
+        # 构建 extents 的 Inode → extent 索引 (OwningObjId ≈ InodeID)
+        extent_by_owner = {}
+        for ext in extent_list:
+            oid = ext["OwningObjId"]
+            if oid not in extent_by_owner:
+                extent_by_owner[oid] = []
+            extent_by_owner[oid].append(ext)
+
+        for record in self.results:
+            path = record.get("Path", "")
+            inode_id = record.get("InodeID")
+
+            # 通过 Path 关联 attrstag
+            if path in tag_by_path:
+                record["TagOwner"] = tag_by_path[path]["TagOwner"]
+                record["TagHash"] = tag_by_path[path]["TagHash"]
+
+            # 通过 Path 关联 dirstats
+            if path in stats_by_path:
+                record["SAFDirStats"] = stats_by_path[path]
+
+            # 通过 InodeID 关联 purgeable 记录
+            if inode_id is not None and inode_id in purgeable_by_inode:
+                p = purgeable_by_inode[inode_id]
+                record["PurgeableFlags"] = p["PurgeableFlags"]
+                record["PurgeableSize"] = human_readable_size(p["PurgeableSize"])
+                try:
+                    record["LastAccessTime"] = convert_mactime_to_iso(
+                        timestamp=p["LastAccessTime"], from_2001=False
+                    )
+                except Exception:
+                    pass
+
+            # 通过 InodeID 关联共享 extent
+            if inode_id is not None and inode_id in extent_by_owner:
+                exts = extent_by_owner[inode_id]
+                record["SharedExtentCount"] = len(exts)
+                record["SharedExtentTotalSize"] = human_readable_size(
+                    sum(e["Size"] for e in exts)
                 )
 
     def _get_files_from_patterns(self, target_path: str, root_paths: list) -> Iterator[str]:
@@ -283,13 +453,52 @@ class FilesystemMetaLog(IOSExtraction):
                     # Find the extracted .fsmeta files
                     fslisting_path = os.path.join(tmp_dir, found_path.split("/")[-1].replace(".tgz", ""))
                     # self.log.info("Extracted fsmeta path: %s", fsmeta_path)
-                    fsmeta_files = glob.glob(os.path.join(fslisting_path, "*.fslisting"))
-                    if not fsmeta_files:
-                        self.log.warning("No .fslisting files found in the extracted directory.")
+
+                    # 收集目录中所有 listing 文件，按类型分类
+                    listing_files = {key: [] for key in LISTING_FILE_TYPES.values()}
+                    for ext, file_type in LISTING_FILE_TYPES.items():
+                        pattern = os.path.join(fslisting_path, f"*{ext}")
+                        listing_files[file_type] = glob.glob(pattern)
+
+                    all_listing = sum(listing_files.values(), [])
+                    if not all_listing:
+                        self.log.warning("No listing files found in the extracted directory.")
                         continue
-                    # Process each .fslisting file
-                    for fsmeta_file in fsmeta_files:
-                        self.log.info("Processing .fslisting file: %s", fsmeta_file.split("/")[-1])
-                        with open(fsmeta_file, "r") as f:
+
+                    # 解析各类 listing 文件
+                    tag_by_path = {}
+                    stats_by_path = {}
+                    purgeable_by_inode = {}
+                    extent_list = []
+
+                    for listing_file in all_listing:
+                        base_name = listing_file.split("/")[-1]
+                        self.log.info("Processing listing file: %s", base_name)
+                        with open(listing_file, "r") as f:
                             content = f.read()
-                            self.process_file_system_mate_log(content) 
+
+                        if listing_file in listing_files["fslisting"]:
+                            self.process_file_system_mate_log(content)
+                        elif listing_file in listing_files["attrstag"]:
+                            tag_by_path.update(
+                                self.process_attrstag_listing(content)
+                            )
+                        elif listing_file in listing_files["dirstats"]:
+                            stats_by_path.update(
+                                self.process_dirstats_listing(content)
+                            )
+                        elif listing_file in listing_files["purgeable"]:
+                            purgeable_by_inode.update(
+                                self.process_purgeable_listing(content)
+                            )
+                        elif listing_file in listing_files["sharedextents"]:
+                            extent_list.extend(
+                                self.process_sharedextents_listing(content)
+                            )
+
+                    # 将附加数据通过 Path 和 InodeID 关联到 fslisting 结果中
+                    if tag_by_path or stats_by_path or purgeable_by_inode or extent_list:
+                        self._enrich_results(
+                            tag_by_path, stats_by_path,
+                            purgeable_by_inode, extent_list,
+                        ) 
