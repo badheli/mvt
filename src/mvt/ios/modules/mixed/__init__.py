@@ -28,6 +28,7 @@ from .webkit_session_resource_log import WebkitSessionResourceLog
 from .whatsapp import Whatsapp
 from .FilesystemMeta import FilesystemMetaLog
 from .CrashReporter import CrashReporterLog
+from .Sysdiagnose import SysdiagnoseLog
 
 MIXED_MODULES = [
     Calls,
@@ -55,4 +56,5 @@ MIXED_MODULES = [
     GlobalPreferences,
     FilesystemMetaLog,
     CrashReporterLog,
+    SysdiagnoseLog,
 ]

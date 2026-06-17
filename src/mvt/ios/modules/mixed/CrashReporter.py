@@ -5,18 +5,15 @@
 import os
 import glob
 import re
-import tarfile
-import tempfile
 import logging
 from json import loads, JSONDecodeError
-from pathlib import Path
 import datetime
 from ..base import IOSExtraction
 from mvt.common.utils import convert_datetime_to_iso
 from typing import Iterator, Optional, Union
 
 CRASH_REPORTER_LOG_FS_PATHS = [
-    # check fs 
+    # check fs
     "private/var/mobile/Library/Logs/CrashReporter/*.ips",
     "private/var/mobile/Library/Logs/CrashReporter/*.ips.ca",
     "private/var/mobile/Library/Logs/CrashReporter/*.ips.ca.synced",
@@ -24,19 +21,6 @@ CRASH_REPORTER_LOG_FS_PATHS = [
 CRASH_REPORTER_LOG_PATHS = [
     "**/*.ips",
     "*.ips",
-]
-SYSDIAGNOSE_LOG_PATHS = [
-    "**/*.log",
-    "*.log",
-    "**/*.log.*",
-    "*.log.*",
-]
-
-# transparency.log  / shutdown.log RunningBoard_state.log
-
-
-SYSDIAGNOSE_PATH = [
-    "DiagnosticLogs/sysdiagnose/sysdiagnose_*.tar.gz",
 ]
 
 DIAGNOSTIC_LOGS_PATH = "DIAGNOSTIC_LOGS_PATH"
@@ -211,7 +195,7 @@ class CrashReporterLog(IOSExtraction):
             if timestamp.tzinfo is not None:
                 timestamp_utc = timestamp.astimezone(datetime.timezone.utc)
             else:
-                timestamp_utc = timestamp.replace(tzinfo=datetime.timezone.utc)
+                timestamp_utc = timestamp.astimezone(datetime.timezone.utc)
             record = {
                 "timestamp": convert_datetime_to_iso(timestamp_utc),
                 "event": (
@@ -259,40 +243,6 @@ class CrashReporterLog(IOSExtraction):
 
             self.results.append(record)
 
-    def process_sysdiagnose_log(self, extracted_path: str, patterns: list) -> None:
-        """Parse sysdiagnose log files, extracting timestamped lines."""
-        self.log.info("Processing sysdiagnose log at path: %s", extracted_path)
-        for log_file in self._get_files_from_patterns(extracted_path, patterns):
-            log_file_name = log_file.split("/")[-1]
-            self.log.info("Found sysdiagnose log: %s", log_file_name)
-            with open(log_file, "rb") as log_file_content:
-                content = log_file_content.read().decode("utf-8", errors="ignore")
-                try:
-                    for line in content.split("\n"):
-                        line = line.strip()
-                        if not line:
-                            continue
-                        timestamp = parse_timestamp(line)
-                        if not timestamp:
-                            continue
-                        if timestamp.tzinfo is not None:
-                            timestamp_utc = timestamp.astimezone(datetime.timezone.utc)
-                        else:
-                            timestamp_utc = timestamp.replace(tzinfo=datetime.timezone.utc)
-                        self.results.append(
-                            {
-                                "timestamp": convert_datetime_to_iso(timestamp_utc),
-                                "event": "sysdiagnose_log_activity",
-                                "data": f"{log_file_name} : {line}",
-                            }
-                        )
-                except Exception as e:
-                    self.log.error(
-                        "Failed to parse sysdiagnose log (%s) path: %s",
-                        str(e),
-                        log_file_name,
-                    )
-
     def check_indicators(self) -> None:
         if not self.indicators:
             return
@@ -325,36 +275,25 @@ class CrashReporterLog(IOSExtraction):
 
 
     def run(self) -> None:
-                
         if self.is_backup:
-            # Check for diagnostic logs from config
-            # self.log.info("Checking for diagnostic logs in environment variable: %s", os.environ[DIAGNOSTIC_LOGS_PATH])
             if DIAGNOSTIC_LOGS_PATH in os.environ:
-                if not os.path.exists(os.environ[DIAGNOSTIC_LOGS_PATH]):
-                    self.log.warning("Diagnostic logs path does not exist: %s", os.environ[DIAGNOSTIC_LOGS_PATH])
+                log_path = os.environ[DIAGNOSTIC_LOGS_PATH]
+                if not os.path.exists(log_path):
+                    self.log.warning(
+                        "Diagnostic logs path does not exist: %s", log_path
+                    )
                     return
 
-                self.log.info("Processing diagnostic log file from config: %s", os.environ[DIAGNOSTIC_LOGS_PATH])
-
-                # parse os.environ[DIAGNOSTIC_LOGS_PATH] ips
-                self.process_sysdiagnose_ips(os.environ[DIAGNOSTIC_LOGS_PATH], CRASH_REPORTER_LOG_PATHS) 
-                # parse sysdiagnose ips
-                for found_path in self._get_files_from_patterns(os.environ[DIAGNOSTIC_LOGS_PATH], SYSDIAGNOSE_PATH):
-                    # DiagnosticLogs/sysdiagnose/sysdiagnose_2025.05.13_14-38-43+0800_iPhone-OS_iPhone_22E252.tar.gz
-                    self.log.info("Found sysdiagnose log at path: %s", found_path)
-                    # Extract the tar file to a temporary directory
-                    with tempfile.TemporaryDirectory() as tmp_dir:
-                        self.log.info("Extracting sysdiagnose log to: %s", tmp_dir)
-                        with tarfile.open(found_path, "r:gz") as tar:
-                            tar.extractall(path=tmp_dir)
-                        # Find the extracted sysdiagnose files
-                        extracted_path = os.path.join(tmp_dir, found_path.split("/")[-1].replace(".tar.gz", ""))
-                        self.process_sysdiagnose_ips(extracted_path, CRASH_REPORTER_LOG_PATHS)  
-                        self.process_sysdiagnose_log(extracted_path, SYSDIAGNOSE_LOG_PATHS)           
-
+                self.log.info(
+                    "Processing diagnostic logs from: %s", log_path
+                )
+                self.process_sysdiagnose_ips(
+                    log_path, CRASH_REPORTER_LOG_PATHS
+                )
         else:
-            self.process_sysdiagnose_ips(self.target_path, CRASH_REPORTER_LOG_FS_PATHS)
-        
+            self.process_sysdiagnose_ips(
+                self.target_path, CRASH_REPORTER_LOG_FS_PATHS
+            )
 
         self.results = sorted(self.results, key=lambda entry: entry["timestamp"])
 
