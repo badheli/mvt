@@ -27,9 +27,8 @@ DIAGNOSTIC_LOGS_PATH = "DIAGNOSTIC_LOGS_PATH"
 
 
 
-# Timezone-aware formats tried first, naive formats as fallback.
-# Order matters: formats with timezone info must match before naive ones
-# so the parsed datetime can be correctly converted to UTC.
+# IPS crash reports always include timezone offsets in their timestamps.
+# Only timezone-aware formats are listed here.
 TIME_FORMATS = [
     "%Y-%m-%d %H:%M:%S.%f %z",       # 2026-05-08 10:57:44.00 +0300
     "%Y-%m-%d %H:%M:%S.%f%z",        # 2023-12-30 00:37:44+0800
@@ -37,7 +36,7 @@ TIME_FORMATS = [
     "%Y-%m-%d %H:%M:%S%z",           # 2025-09-08 21:58:56+0800
     "%Y-%m-%d %H:%M:%S.%fZ",         # 2025-08-28 04:36:25.285567Z
     "%Y-%m-%d %H:%M:%SZ",            # 2025-08-28 04:36:25Z
-    # Naive formats (no timezone) — only used as fallback
+    # Naive formats — used only by Sysdiagnose for log parsing
     "%a %b %d %H:%M:%S %Y",          # Sun Oct 19 13:19:37 2025
     "%m/%d/%y %H:%M:%S.%f",          # 09/13/25 13:43:37.426607
     "%m/%d/%y %H:%M:%S",             # 09/13/25 13:43:37
@@ -148,7 +147,7 @@ class CrashReporterLog(IOSExtraction):
                 self.log.error("IPS first line is not a JSON object: %s", ips_file_name)
                 continue
 
-            # Parse timestamp — prefer timezone-aware formats
+            # Parse timestamp — IPS always carries a timezone offset
             timestamp = None
             for ts_field in ("timestamp", "captureTime", "date"):
                 if ts_field not in log_line:
@@ -157,21 +156,11 @@ class CrashReporterLog(IOSExtraction):
                 for fmt in TIME_FORMATS:
                     try:
                         ts = datetime.datetime.strptime(ts_value, fmt)
-                        # Skip naive matches if we haven't exhausted aware formats
-                        if ts.tzinfo is None:
-                            continue
-                        timestamp = ts
-                        break
+                        if ts.tzinfo is not None:
+                            timestamp = ts
+                            break
                     except (ValueError, TypeError):
                         continue
-                # Fallback: accept naive match if no aware format matched
-                if timestamp is None:
-                    for fmt in TIME_FORMATS:
-                        try:
-                            timestamp = datetime.datetime.strptime(ts_value, fmt)
-                            break
-                        except (ValueError, TypeError):
-                            continue
                 if timestamp:
                     break
 
@@ -192,10 +181,7 @@ class CrashReporterLog(IOSExtraction):
             exception_info = log_line.get("exception", {})
             termination_info = log_line.get("termination", {})
 
-            if timestamp.tzinfo is not None:
-                timestamp_utc = timestamp.astimezone(datetime.timezone.utc)
-            else:
-                timestamp_utc = timestamp.astimezone(datetime.timezone.utc)
+            timestamp_utc = timestamp.astimezone(datetime.timezone.utc)
             record = {
                 "timestamp": convert_datetime_to_iso(timestamp_utc),
                 "event": (

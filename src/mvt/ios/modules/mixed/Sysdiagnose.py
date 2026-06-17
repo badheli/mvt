@@ -54,13 +54,15 @@ def convert_to_utc(timestamp, device_tz=None):
 
     If the timestamp carries an explicit timezone offset, use it directly.
     If naive and device_tz is known, interpret as device local time.
-    Otherwise fall back to system local timezone.
+    Raises ValueError if the timestamp is naive and no device_tz is available.
     """
     if timestamp.tzinfo is not None:
         return timestamp.astimezone(datetime.timezone.utc)
     if device_tz is not None:
         return timestamp.replace(tzinfo=device_tz).astimezone(datetime.timezone.utc)
-    return timestamp.astimezone(datetime.timezone.utc)
+    raise ValueError(
+        "Cannot convert naive timestamp to UTC: no device timezone available"
+    )
 
 
 class SysdiagnoseLog(IOSExtraction):
@@ -132,9 +134,9 @@ class SysdiagnoseLog(IOSExtraction):
                                 "data": f"{log_file_name} : {line}",
                             }
                         )
-                except Exception as e:
+                except (OSError, UnicodeDecodeError) as e:
                     self.log.error(
-                        "Failed to parse sysdiagnose log (%s) path: %s",
+                        "Failed to read sysdiagnose log (%s) path: %s",
                         str(e),
                         log_file_name,
                     )
