@@ -137,13 +137,13 @@ class CrashReporterLog(IOSExtraction):
     
 
     def process_sysdiagnose_ips(self, extracted_path: str, patterns: list) -> None:
-        """解析 .ips (iOS IPS 崩溃报告) 文件，提取关键字段。"""
+        """Parse .ips (iOS crash report) files, extracting key fields."""
         self.log.info("Processing IPS crash reports at path: %s", extracted_path)
         for ips_file in self._get_files_from_patterns(extracted_path, patterns):
             ips_file_name = ips_file.split("/")[-1]
             self.log.info("Found IPS crash report: %s", ips_file_name)
 
-            # 读取并解析 JSON 首行
+            # Read and parse first line as JSON
             with open(ips_file, "rb") as crash_report_log:
                 content = crash_report_log.read().decode("utf-8", errors="ignore")
                 lines = content.split("\n")
@@ -159,7 +159,7 @@ class CrashReporterLog(IOSExtraction):
                 self.log.error("IPS first line is not a JSON object: %s", ips_file_name)
                 continue
 
-            # 解析时间戳
+            # Parse timestamp
             timestamp = None
             for ts_field in ("timestamp", "captureTime", "date"):
                 if ts_field in log_line:
@@ -180,7 +180,7 @@ class CrashReporterLog(IOSExtraction):
                 )
                 continue
 
-            # 分类：系统进程 / 第三方进程 / 无 bundleID
+            # Classify: system process / third-party / no bundleID
             bundle_id = log_line.get("bundleID", "")
             is_system = False
             if bundle_id:
@@ -212,7 +212,7 @@ class CrashReporterLog(IOSExtraction):
                 "IPSFile": ips_file_name,
             }
 
-            # 异常详情
+            # Exception details
             if exception_info:
                 exc_type = exception_info.get("type", "")
                 exc_signal = exception_info.get("signal", "")
@@ -224,13 +224,13 @@ class CrashReporterLog(IOSExtraction):
                         + (f"/{exc_signal}" if exc_signal else "")
                     )
 
-            # 终止原因
+            # Termination reason
             if termination_info:
                 term_reason = termination_info.get("reason", "")
                 if term_reason:
                     record["TerminationReason"] = term_reason
 
-            # 触发进程
+            # Triggered by
             triggered_by = log_line.get("triggered_by", "")
             if triggered_by:
                 record["TriggeredBy"] = triggered_by
@@ -238,7 +238,7 @@ class CrashReporterLog(IOSExtraction):
             self.results.append(record)
 
     def process_sysdiagnose_log(self, extracted_path: str, patterns: list) -> None:
-        """解析 sysdiagnose 系统日志文件，逐行提取带时间戳的记录。"""
+        """Parse sysdiagnose log files, extracting timestamped lines."""
         self.log.info("Processing sysdiagnose log at path: %s", extracted_path)
         for log_file in self._get_files_from_patterns(extracted_path, patterns):
             log_file_name = log_file.split("/")[-1]
@@ -273,7 +273,7 @@ class CrashReporterLog(IOSExtraction):
             return
 
         for result in self.results:
-            # 检查崩溃进程的 BundleID 是否为已知恶意应用
+            # Check if crashed process BundleID matches known malicious app
             bundle_id = result.get("BundleID")
             if bundle_id:
                 ioc_match = self.indicators.check_process(bundle_id)
@@ -289,7 +289,7 @@ class CrashReporterLog(IOSExtraction):
                         ioc_match.message, "", result, matched_indicator=ioc_match.ioc
                     )
 
-            # 检查 ProcessName 是否为已知恶意进程
+            # Check if ProcessName matches known malicious process
             process_name = result.get("ProcessName")
             if process_name:
                 ioc_match = self.indicators.check_process(process_name)

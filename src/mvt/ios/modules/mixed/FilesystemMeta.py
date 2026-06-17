@@ -17,7 +17,7 @@ FILE_SYSTEM_MATE_LOG_PATHS = [
     "FilesystemMeta-*.fsmeta.tgz",
 ]
 
-# fsmeta 解压后目录中的各类 listing 文件扩展名
+# Listing file extensions found in extracted fsmeta directory
 LISTING_FILE_TYPES = {
     ".fslisting": "fslisting",
     ".attrstaglisting": "attrstag",
@@ -30,7 +30,7 @@ DIAGNOSTIC_LOGS_PATH = "DIAGNOSTIC_LOGS_PATH"
 
 
 def human_readable_size(size):
-    """将字节数转换为人类可读格式"""
+    """Convert bytes to a human-readable size string."""
     for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
         if size < 1000.0:
             return f"{size:.1f} {unit}"
@@ -38,26 +38,26 @@ def human_readable_size(size):
     return f"{size:.1f} TB"
 
 def mode_to_linux_format(mode):
-    """将十进制 Mode 转换为 Linux 标准权限字符串"""
-    # 转换为八进制字符串，去掉前缀 '0o'
+    """Convert decimal mode to Linux permission string (e.g. drwxr-xr-x)."""
+    # Convert to octal string, strip '0o' prefix
     mode_oct = oct(int(mode))[2:]
-    
-    # 文件类型映射
+
+    # File type mapping
     type_char = '-'
     if len(mode_oct) > 4 and mode_oct[-5] == '4':
-        type_char = 'd'  # 目录
-    # 其他类型（如 l, s 等）可根据需要扩展
+        type_char = 'd'  # directory
+    # Other types (l, s, etc.) can be added as needed
+
+    # Extract last three permission digits
+    perm_bits = mode_oct[-3:].zfill(3)  # ensure three digits, e.g. '755'
     
-    # 提取后三位权限
-    perm_bits = mode_oct[-3:].zfill(3)  # 确保是三位，如 '755'
-    
-    # 权限映射表
+    # Permission bit mapping
     perm_map = {
         '0': '---', '1': '--x', '2': '-w-', '3': '-wx',
         '4': 'r--', '5': 'r-x', '6': 'rw-', '7': 'rwx'
     }
     
-    # 转换为 rwx 格式
+    # Convert to rwx format
     user_perm = perm_map[perm_bits[0]]
     group_perm = perm_map[perm_bits[1]]
     other_perm = perm_map[perm_bits[2]]
@@ -150,7 +150,7 @@ class FilesystemMetaLog(IOSExtraction):
                     ioc_match.message, "", result, matched_indicator=ioc_match.ioc
                 )
 
-            # 检查 TagOwner (来自 .attrstaglisting) 是否为已知恶意进程
+            # Check if TagOwner (from .attrstaglisting) matches known malicious process
             if result.get("TagOwner"):
                 ioc_match = self.indicators.check_process(result["TagOwner"])
                 if ioc_match:
@@ -159,10 +159,10 @@ class FilesystemMetaLog(IOSExtraction):
                     )
 
     def _parse_simple_listing(self, content, expected_cols):
-        """通用简单 listing 解析器。
+        """Generic simple listing parser.
 
-        跳过头部直到 <BEGIN>，然后按 tab 分割每行，
-        返回列数足够的行列表。
+        Skips header lines until <BEGIN>, then splits each data line by tab.
+        Returns a list of rows that have at least `expected_cols` columns.
         """
         rows = []
         in_data_section = False
@@ -180,9 +180,9 @@ class FilesystemMetaLog(IOSExtraction):
         return rows
 
     def process_attrstag_listing(self, content):
-        """解析 .attrstaglisting：Tag-Owner, Tag-Hash, Path
+        """Parse .attrstaglisting: Tag-Owner, Tag-Hash, Path.
 
-        返回以 Path 为键的字典，值为 TagOwner 和 TagHash。
+        Returns a dict keyed by Path with TagOwner and TagHash values.
         """
         tag_by_path = {}
         for columns in self._parse_simple_listing(content, 3):
@@ -198,9 +198,9 @@ class FilesystemMetaLog(IOSExtraction):
         return tag_by_path
 
     def process_dirstats_listing(self, content):
-        """解析 .dirstatsdatalisting：Path, SAFDirStats
+        """Parse .dirstatsdatalisting: Path, SAFDirStats.
 
-        返回以 Path 为键的字典，值为 SAFDirStats 标志。
+        Returns a dict keyed by Path with SAFDirStats flag values.
         """
         stats_by_path = {}
         for columns in self._parse_simple_listing(content, 2):
@@ -213,10 +213,10 @@ class FilesystemMetaLog(IOSExtraction):
         return stats_by_path
 
     def process_purgeable_listing(self, content):
-        """解析 .purgeablerecordslisting：Inode-Number, Purgeable-Flags,
-        Last-Access-Time, Purgeable-Size
+        """Parse .purgeablerecordslisting: Inode-Number, Purgeable-Flags,
+        Last-Access-Time, Purgeable-Size.
 
-        返回以 Inode-Number 为键的字典。
+        Returns a dict keyed by Inode-Number.
         """
         purgeable_by_inode = {}
         for columns in self._parse_simple_listing(content, 4):
@@ -233,10 +233,10 @@ class FilesystemMetaLog(IOSExtraction):
         return purgeable_by_inode
 
     def process_sharedextents_listing(self, content):
-        """解析 .sharedextentslisting：Physical-Block-Number, Owning-Obj-Id,
-        Size, Reference-Count
+        """Parse .sharedextentslisting: Physical-Block-Number, Owning-Obj-Id,
+        Size, Reference-Count.
 
-        返回记录列表，同时建一个以 Owning-Obj-Id 为键的索引供关联查询。
+        Returns a list of extent records.
         """
         extents = []
         for columns in self._parse_simple_listing(content, 4):
@@ -254,13 +254,13 @@ class FilesystemMetaLog(IOSExtraction):
 
     def _enrich_results(self, tag_by_path, stats_by_path,
                          purgeable_by_inode, extent_list):
-        """将附加 listing 数据合并到 fslisting 结果中。
+        """Merge additional listing data into fslisting results.
 
-        通过 Path 关联 attrstag 和 dirstats，
-        通过 InodeID 关联 purgeable 记录，
-        通过 InodeID 关联 shared extents（OwningObjId ↔ InodeID）。
+        Join by Path for attrstag and dirstats data,
+        by InodeID for purgeable records,
+        and by InodeID for shared extents (OwningObjId ≈ InodeID).
         """
-        # 构建 extents 的 Inode → extent 索引 (OwningObjId ≈ InodeID)
+        # Build Inode -> extent index (OwningObjId ≈ InodeID)
         extent_by_owner = {}
         for ext in extent_list:
             oid = ext["OwningObjId"]
@@ -272,16 +272,16 @@ class FilesystemMetaLog(IOSExtraction):
             path = record.get("Path", "")
             inode_id = record.get("InodeID")
 
-            # 通过 Path 关联 attrstag
+            # Join attrstag by Path
             if path in tag_by_path:
                 record["TagOwner"] = tag_by_path[path]["TagOwner"]
                 record["TagHash"] = tag_by_path[path]["TagHash"]
 
-            # 通过 Path 关联 dirstats
+            # Join dirstats by Path
             if path in stats_by_path:
                 record["SAFDirStats"] = stats_by_path[path]
 
-            # 通过 InodeID 关联 purgeable 记录
+            # Join purgeable records by InodeID
             if inode_id is not None and inode_id in purgeable_by_inode:
                 p = purgeable_by_inode[inode_id]
                 record["PurgeableFlags"] = p["PurgeableFlags"]
@@ -293,7 +293,7 @@ class FilesystemMetaLog(IOSExtraction):
                 except Exception:
                     pass
 
-            # 通过 InodeID 关联共享 extent
+            # Join shared extents by InodeID
             if inode_id is not None and inode_id in extent_by_owner:
                 exts = extent_by_owner[inode_id]
                 record["SharedExtentCount"] = len(exts)
@@ -310,17 +310,17 @@ class FilesystemMetaLog(IOSExtraction):
                 yield found_path
 
     def _parse_column_map(self, line):
-        """解析列标题行，返回列名到索引的映射。
+        """Parse column header line, returning a column-name to index mapping.
 
-        通过动态解析列标题行来确定各列的索引位置，
-        兼容不同 iOS 版本的 fslisting 格式差异。
-        iOS 26 新增了 atime 和 Inode-ID 列。
+        Dynamically determine column positions from the header line
+        to support different iOS fslisting format versions.
+        iOS 26 added atime and Inode-ID columns.
         """
         headers = line.strip().split('\t')
         return {header.strip(): idx for idx, header in enumerate(headers)}
 
     def _get_column_indices(self, column_map):
-        """从列映射中获取各字段的索引，缺失时使用旧格式默认值。"""
+        """Get field indices from column map, falling back to old format defaults."""
         return {
             'size_on_disk': column_map.get('Size-On-Disk', 0),
             'file_size': column_map.get('File-Size', 1),
@@ -338,7 +338,7 @@ class FilesystemMetaLog(IOSExtraction):
         in_data_section = False
         column_map = None
 
-        # 旧格式默认列映射 (回退方案)
+        # Old format default column mapping (fallback)
         DEFAULT_COLUMN_MAP = {
             'Size-On-Disk': 0, 'File-Size': 1, 'Compression': 2,
             'FS-Purgeable-Flags': 3, 'mtime': 4, 'Mode': 5,
@@ -350,16 +350,16 @@ class FilesystemMetaLog(IOSExtraction):
             if not line_stripped:
                 continue
 
-            # 头部处理
+            # Process header section
             if not in_data_section:
                 if line_stripped == '<BEGIN>':
                     in_data_section = True
-                    # 未找到列标题时使用旧格式默认映射
+                    # Use old format defaults if no column header found
                     if column_map is None:
                         column_map = DEFAULT_COLUMN_MAP
                     continue
 
-                # 动态解析列标题行 (兼容新旧格式)
+                # Dynamically parse column header (supports old and new formats)
                 if 'Size-On-Disk' in line_stripped and 'Path' in line_stripped:
                     column_map = self._parse_column_map(line_stripped)
                 continue
@@ -367,7 +367,7 @@ class FilesystemMetaLog(IOSExtraction):
             indices = self._get_column_indices(column_map)
             columns = line.split('\t')
 
-            # 确保列数足够
+            # Ensure enough columns
             max_idx = max(v for v in indices.values() if v >= 0)
             if len(columns) <= max_idx:
                 continue
@@ -405,7 +405,7 @@ class FilesystemMetaLog(IOSExtraction):
                 "Path": path,
             }
 
-            # iOS 26 新增字段
+            # iOS 26 additional fields
             if indices['atime'] >= 0:
                 try:
                     atime = int(columns[indices['atime']])
@@ -463,7 +463,7 @@ class FilesystemMetaLog(IOSExtraction):
                     fslisting_path = os.path.join(tmp_dir, found_path.split("/")[-1].replace(".tgz", ""))
                     # self.log.info("Extracted fsmeta path: %s", fsmeta_path)
 
-                    # 收集目录中所有 listing 文件，按类型分类
+                    # Collect all listing files in directory, grouped by type
                     listing_files = {key: [] for key in LISTING_FILE_TYPES.values()}
                     for ext, file_type in LISTING_FILE_TYPES.items():
                         pattern = os.path.join(fslisting_path, f"*{ext}")
@@ -474,7 +474,7 @@ class FilesystemMetaLog(IOSExtraction):
                         self.log.warning("No listing files found in the extracted directory.")
                         continue
 
-                    # 解析各类 listing 文件
+                    # Parse each type of listing file
                     tag_by_path = {}
                     stats_by_path = {}
                     purgeable_by_inode = {}
@@ -505,7 +505,7 @@ class FilesystemMetaLog(IOSExtraction):
                                 self.process_sharedextents_listing(content)
                             )
 
-                    # 将附加数据通过 Path 和 InodeID 关联到 fslisting 结果中
+                    # Enrich fslisting results with additional data via Path and InodeID
                     if tag_by_path or stats_by_path or purgeable_by_inode or extent_list:
                         self._enrich_results(
                             tag_by_path, stats_by_path,
